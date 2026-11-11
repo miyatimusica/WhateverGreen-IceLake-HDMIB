@@ -74,13 +74,26 @@ verified; other Ice Lake IDs need the porting steps below.
 
 ## Install
 
+### What you need
+
+Only if you build it yourself; the release kext needs nothing but OpenCore.
+
+| Tool | Used for | Notes |
+|---|---|---|
+| **Xcode** (full app) | building the kext | Not just the Command Line Tools: `xcodebuild` has to exist. Point the toolchain at it with `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` |
+| Command Line Tools | `git`, `perl`, `python3` | They come with Xcode; `xcode-select --install` on its own is **not** enough to build |
+| `git` | cloning Lilu, MacKernelSDK and WhateverGreen | Ships with the Command Line Tools |
+| `python3` + `capstone` | `verify_layout.sh`, `tools/layout_fingerprint.py` | `verify_layout.sh` installs capstone into a temporary venv by itself; the manual steps below expect it in your environment (`pip install capstone`) |
+| `sudo` | `verify_layout.sh`, `hdmib_diag.sh`, `hdmib_setup.sh` | They read the kernel collection and the EFI; nothing outside your home is modified |
+| Intel or Apple Silicon Mac | building | The kext is always built for `x86_64` |
+
 ### 1. Get the kext
 
 Either download `WhateverGreen-HDMIB.kext.zip` from
 [Releases](../../releases) and unzip it, or build it yourself:
 
 ```bash
-bash build_weg_hdmib.sh          # needs full Xcode, not just Command Line Tools
+bash build_weg_hdmib.sh
 ```
 
 The build clones Lilu, MacKernelSDK and WhateverGreen, adds this module with two small
@@ -152,11 +165,17 @@ PciRoot(0x0)/Pci(0x2,0x0)`, not a trimmed example.
 | `framebuffer-patch0-find` / `-replace` | see step 3 | **the module** | creates the HDMI connector. The `find` bytes must match an entry of *your* platform table |
 | `AAPL,ig-platform-id` | `01005c8a` | platform | the only ID verified with this module |
 | `device-id` | `5c8a0000` | platform | this ASUS reports `0x8A56` and is spoofed to `0x8A5C` |
-| `framebuffer-stolenmem` / `-fbmem` / `-unifiedmem` | `00003001` / `00009000` / `000000c0` | platform | depend on the BIOS DVMT pre-allocation |
+| `framebuffer-stolenmem` / `-fbmem` / `-unifiedmem` | `00003001` / `00009000` / `000000c0` | platform | ⚠️ machine-specific — they depend on the BIOS DVMT pre-allocation. Do not copy them to another board |
 | `enable-dbuf-early-optimizer` | `01000000` | platform | fixed a black screen at the login window here; independent of the module |
 | `enable-cdclk-frequency-fix`, `enable-dvmt-calc-fix`, `enable-cfl-backlight-fix`, `AAPL,GfxYTile`, `igfxfw` | `01000000` / `02000000` | platform | WhateverGreen / driver options; unrelated to HDMI |
 | `AAPL,slot-name`, `device_type`, `model` | strings | cosmetic | labels shown in System Information and Hackintool; no functional effect |
 | `AAPL00,override-no-connect` | internal panel EDID | machine-specific | not included in the example |
+
+> ⚠️ **Do not paste this file into another machine as-is.** The connector patch is the part
+> the module needs and it is tied to platform ID `01005c8a`; the memory sizes
+> (`framebuffer-stolenmem`, `-fbmem`, `-unifiedmem`) and the `device-id` spoof belong to
+> this board and its BIOS DVMT setting. Wrong values give a black screen or a boot that
+> never reaches the desktop.
 
 ---
 
@@ -292,7 +311,7 @@ the checklist on real hardware.
 | Compile-checked against | WhateverGreen `093e76f`, Lilu `0249c3a`, MacKernelSDK `3f75008` |
 | Kext version | `1.7.2` (WhateverGreen's own version) |
 | SHA-1 of the released binary | `d5ff7571a4ba606da041f3e62f2d8ff62801ce80` |
-| Requirement | full Xcode, Intel or Apple Silicon (the kext is always x86_64) |
+| Requirement | full Xcode, Intel or Apple Silicon (the kext is always x86_64) — see [What you need](#what-you-need) |
 
 ---
 
