@@ -12,10 +12,14 @@
 		<data>
 		AQBcig==
 		</data>
+		<key>AAPL,slot-name</key>
+		<string>Interno</string>
 		<key>device-id</key>
 		<data>
 		XIoAAA==
 		</data>
+		<key>device_type</key>
+		<string>VGA Compatible Controller</string>
 		<key>enable-cdclk-frequency-fix</key>
 		<data>
 		AQAAAA==
@@ -64,6 +68,8 @@
 		<data>
 		AgAAAA==
 		</data>
+		<key>model</key>
+		<string>Intel Iris Plus Graphics</string>
 	</dict>
 </dict>
 </plist>

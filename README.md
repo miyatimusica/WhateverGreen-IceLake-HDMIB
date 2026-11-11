@@ -141,8 +141,10 @@ did not — in that case HDMI will not light up no matter what.
 
 ASUS VivoBook 14 X415JA, i5-1035G1, Iris Plus G1 (device-id `0x8A56`, spoofed `0x8A5C`),
 BIOS DVMT pre-allocated 64M, OpenCore 1.0.8, internal panel 3456×1944, HDMI at 1360×768.
-The iGPU entry of its `config.plist` is in
-[`example_iGPU_DeviceProperties.plist`](example_iGPU_DeviceProperties.plist).
+Its iGPU entry is in
+[`example_iGPU_DeviceProperties.plist`](example_iGPU_DeviceProperties.plist) — the exact
+dictionary from that machine's `config.plist`, `DeviceProperties → Add →
+PciRoot(0x0)/Pci(0x2,0x0)`, not a trimmed example.
 
 | Key | Value | Needed by | Notes |
 |---|---|---|---|
@@ -153,6 +155,7 @@ The iGPU entry of its `config.plist` is in
 | `framebuffer-stolenmem` / `-fbmem` / `-unifiedmem` | `00003001` / `00009000` / `000000c0` | platform | depend on the BIOS DVMT pre-allocation |
 | `enable-dbuf-early-optimizer` | `01000000` | platform | fixed a black screen at the login window here; independent of the module |
 | `enable-cdclk-frequency-fix`, `enable-dvmt-calc-fix`, `enable-cfl-backlight-fix`, `AAPL,GfxYTile`, `igfxfw` | `01000000` / `02000000` | platform | WhateverGreen / driver options; unrelated to HDMI |
+| `AAPL,slot-name`, `device_type`, `model` | strings | cosmetic | labels shown in System Information and Hackintool; no functional effect |
 | `AAPL00,override-no-connect` | internal panel EDID | machine-specific | not included in the example |
 
 ---
