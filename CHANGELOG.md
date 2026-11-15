@@ -3,6 +3,8 @@
 ## 1.0-rc6 ("v46") — 2026-11
 * Colour-format fix is now **automatic, no boot-arg needed**: `igfxhdmib-rgb` defaults to -1 (auto). If the monitor's EDID advertises YCbCr (base byte 24 or CEA byte 3) the module hides it together with the CEA extension (the behaviour of rc5 `rgb=2`, confirmed on an LG 1366x768 monitor that was purple); monitors that do not advertise YCbCr keep their full EDID (CEA modes, audio flags).
 * The decision is taken per monitor at each full EDID read, so swapping monitors re-evaluates it. `igfxhdmib-rgb=0|1|2` still forces a mode. `HDMIB-edid` shows the active mode (`rgb=`).
+* First published build since rc3; rc4 and rc5 were development builds and never got their own release.
+* The forced mode (`igfxhdmib-rgb=2`) is confirmed on hardware. The automatic decision is **not** yet: with the reference LG monitor and no boot-arg, `HDMIB-edid` should show `rgb=2` and `ext=0` and the picture should not be purple. If it is, set `igfxhdmib-rgb=2` explicitly and report the `feat=`/`cea3=` values.
 
 ## 1.0-rc5 ("v45") — 2026-11
 * `igfxhdmib-rgb=2`: additionally hides the CEA extension block (count byte 0, checksum fixed) so the driver treats the sink as DVI/RGB, like the VGA adapter that worked. Driver log of the purple case: `Setting display mode ... encoded with 0x2` (HDMI AVI Y=2 = YCbCr 4:4:4) even after `rgb=1`.
