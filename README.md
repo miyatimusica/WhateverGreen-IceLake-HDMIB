@@ -98,8 +98,8 @@ Only if you build it yourself; the release kext needs nothing but OpenCore.
 
 Either download `WhateverGreen-HDMIB.kext.zip` from
 **[release v1.0.0-rc6](../../releases/tag/v1.0.0-rc6)** and unzip it, or build it yourself.
-Every release here is a candidate and is marked *pre-release* on GitHub on purpose: it is
-the current build, not a stable 1.0 yet.
+It is the current build; the `rc` in the tag means the automatic colour mode still needs a
+hardware confirmation before this becomes 1.0.
 
 ```bash
 bash build_weg_hdmib.sh
