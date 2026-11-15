@@ -2,7 +2,7 @@
 //  kern_igfx_hdmib.hpp
 //  HDMI on DDI B for AppleIntelICLLPGraphicsFramebuffer (Intel Ice Lake, macOS 15 / 26)
 //
-//  Header-only module for WhateverGreen. Version 1.0-rc3 (internally "v43").
+//  Header-only module for WhateverGreen. Version 1.0-rc6 (internally "v46").
 //
 //  Why it exists
 //  -------------
@@ -31,6 +31,11 @@
 //    igfxhdmib-aux=0          do not short-circuit the AUX reads the accelerator keeps issuing for the HDMI stream
 //    igfxhdmib-dc6fix=0       do not skip the second enableHWDC6() (panic "DC6 is already enabled")
 //    igfxhdmib-edid-fallback=1  if the monitor's EDID cannot be read, present a generic 1024x768@60 EDID instead of nothing
+//    igfxhdmib-rgb=-1|0|1|2   colour-format control. A sink that advertises YCbCr makes the driver send YCbCr 4:4:4 in the HDMI AVI
+//                             infoframe, which this path cannot handle (purple/magenta picture).
+//                               -1 (default) = automatic: if the EDID advertises YCbCr, behave as 2; otherwise leave the EDID untouched
+//                                2 = hide YCbCr support AND the CEA extension block, the sink is treated as plain DVI/RGB (no infoframes)
+//                                1 = only hide the YCbCr bits   0 = never touch the EDID
 //    igfxhdmib-force=1        run on a macOS version whose private structure layout has not been verified (see Layout)
 //
 //  Diagnostics:  ioreg -l | grep HDMIB      (HDMIB-status, HDMIB-layout, HDMIB-hooks)
@@ -54,7 +59,7 @@
 
 namespace HDMIB {
 
-	static constexpr const char *Version = "1.0-rc3";
+	static constexpr const char *Version = "1.0-rc6";
 
 	// IOLog directly: Lilu's SYSLOG is silent when interrupts are disabled (hotplug paths run that way).
 	#define HLOG(fmt, ...) do { if (ml_get_interrupts_enabled()) IOLog("HDMIB: " fmt "\n", ## __VA_ARGS__); } while (0)
@@ -118,7 +123,7 @@ namespace HDMIB {
 	static uint32_t tddi = 1;                 // target DDI
 	static int      fbIdx = 2;                // target framebuffer index
 	static bool     fbIdxFixed = false;       // set by igfxhdmib-fb
-	static int      hwCursorFb = 1, swCursorAll = 0, auxBlockEnabled = 1, dc6FixEnabled = 1, edidFallback = 0, bootDetectSec = 3;
+	static int      rgbMode = -1, rgbOnly = 0, hwCursorFb = 1, swCursorAll = 0, auxBlockEnabled = 1, dc6FixEnabled = 1, edidFallback = 0, bootDetectSec = 3;
 	static void    *gCtl = nullptr;           // AppleIntelFramebufferController, captured at the first hotplug
 
 	static void *(*getPortByDDI)(uint32_t) = nullptr;
@@ -147,7 +152,7 @@ namespace HDMIB {
 	static void (*orgInitVRRCaps)(void *) = nullptr;
 	static void (*orgEnableHWDC6)(void *) = nullptr;
 
-	static uint32_t hotplugs = 0, lastPortMode = 0, edidReads = 0, edidFails = 0, dbufFixed = 0, dc6Skipped = 0, auxBlocked = 0,
+	static uint32_t edidForgotten = 0, hotplugs = 0, lastPortMode = 0, edidReads = 0, edidFails = 0, dbufFixed = 0, dc6Skipped = 0, auxBlocked = 0,
 	                cursorBlocked = 0, vrrOff = 0;
 
 	// ---------------------------------------------------------------------------------------------------------------------
@@ -171,12 +176,23 @@ namespace HDMIB {
 		auto root = IORegistryEntry::getRegistryRoot();
 		if (root && ml_get_interrupts_enabled()) root->setProperty(key, value);
 	}
+	static uint8_t  liveEdid[256];
+	static bool     liveEdidOk = false;
+	static uint32_t gmPin = 0xff, gmMode = 0, gmBlocks = 0;
 	static void publishStatus() {
 		if (!ml_get_interrupts_enabled()) return;
 		char s[192];
 		snprintf(s, sizeof(s), "hotplugs=%u edid-ok=%u edid-fail=%u dbuf-fixed=%u dc6-skipped=%u aux-blocked=%u cursor-blocked=%u fb=%d ddi=%u",
 		         hotplugs, edidReads, edidFails, dbufFixed, dc6Skipped, auxBlocked, cursorBlocked, fbIdx, tddi);
 		setRoot("HDMIB-status", s);
+		if (liveEdidOk) {
+			char e[224];
+			const uint8_t *d = liveEdid;
+			char m[4] = { (char)(64 + ((d[8] >> 2) & 31)), (char)(64 + (((d[8] & 3) << 3) | (d[9] >> 5))), (char)(64 + (d[9] & 31)), 0 };
+			snprintf(e, sizeof(e), "mfg=%s product=0x%02x%02x serial=0x%02x%02x%02x%02x year=%u blocks=%u bpc-byte=0x%02x input=0x%02x feat=0x%02x ext=%u cea3=0x%02x rgb=%d forgotten=%u",
+			         m, d[11], d[10], d[15], d[14], d[13], d[12], 1990u + d[17], gmBlocks, d[20] & 0x70, d[20], d[24], d[126], gmBlocks >= 2 ? d[131] : 0, rgbOnly, edidForgotten);
+			setRoot("HDMIB-edid", e);
+		} else setRoot("HDMIB-edid", "none (Apple's own answer is used)");
 		// Self-diagnosis of the connector table: shows what the driver really has on the target DDI.
 		auto cfg = getPortByDDI ? configOf(getPortByDDI(tddi)) : nullptr;
 		if (cfg) {
@@ -223,9 +239,6 @@ namespace HDMIB {
 	// ---------------------------------------------------------------------------------------------------------------------
 	// EDID: GMBUS (with a Linux-style controller reset after a NAK) and a GPIO bit-bang fallback.
 	// ---------------------------------------------------------------------------------------------------------------------
-	static uint8_t  liveEdid[256];
-	static bool     liveEdidOk = false;
-	static uint32_t gmPin = 0xff, gmMode = 0, gmBlocks = 0;
 	extern "C" uint64_t mach_absolute_time(void);
 
 	static void gmbusReset(void *ctl) {
@@ -331,18 +344,32 @@ namespace HDMIB {
 		p = tddi + 1;
 		return (p >= 1 && p <= 3) ? p : 2;
 	}
+	// igfxhdmib-rgb: drop the sink's advertised YCbCr support (base block byte 24 bits 4:3, CEA extension byte 3 bits 5:4) so the
+	// driver keeps the link in RGB. `ext` = 0 for the base block, 1 for the first extension. Fixes the checksum.
+	static void sanitizeEdid(uint8_t *b, int ext) {
+		if (rgbOnly <= 0 || !b) return;
+		bool changed = false;
+		if (ext == 0 && b[0] == 0x00 && b[1] == 0xff && (b[20] & 0x80) && (b[24] & 0x18)) { b[24] &= (uint8_t)~0x18; changed = true; }
+		if (ext == 0 && rgbOnly >= 2 && b[0] == 0x00 && b[1] == 0xff && b[126] != 0) { b[126] = 0; changed = true; }   // no extension blocks
+		if (ext == 1 && b[0] == 0x02 && b[1] >= 2 && (b[3] & 0x30)) { b[3] &= (uint8_t)~0x30; changed = true; }
+		if (changed) { uint8_t sum = 0; for (int i = 0; i < 127; i++) sum = (uint8_t)(sum + b[i]); b[127] = (uint8_t)(0x100 - sum); }
+	}
 	static bool readLiveEdid(void *ctl) {
 		if (!readReg || !writeReg || !ctl) return false;
 		ensurePW();
 		uint8_t tmp[128];
 		if (liveEdidOk) {
-			// Already known (wake from sleep, screen saver...): a re-hotplug must not block the framebuffer thread. One quick
-			// revalidation; on failure keep the cached EDID; a different monitor falls through to the full read.
+			// Already known (wake from sleep, screen saver...): one quick revalidation. If it is the same monitor, keep the cache.
+			// A different monitor OR a sink that does not answer falls through to the full read: a stale EDID of a previous monitor
+			// is worse than none (wrong modes, wrong colour format).
 			uint32_t pin = gmPin <= 3 ? gmPin : primaryPin();
 			bool ok = tryBlock(ctl, pin, 0, 0, tmp);
 			if (!ok && gmMode >= 1) ok = tryBlock(ctl, pin, (int)gmMode, 0, tmp);
 			if (ok && edidHeaderOk(tmp)) {
+				sanitizeEdid(tmp, 0);
 				for (int i = 0; i < 128; i++) if (tmp[i] != liveEdid[i]) { liveEdidOk = false; break; }
+			} else {
+				liveEdidOk = false;
 			}
 			if (liveEdidOk) return true;
 		}
@@ -353,7 +380,7 @@ namespace HDMIB {
 		for (int method = 0; method <= 2 && !liveEdidOk; method++) {          // 0,1 = GMBUS, 2 = GPIO bit-bang
 			unsigned npins = (method < 2) ? 1 : 3;                            // GMBUS only on the platform pin, GPIO tries all
 			for (unsigned pi = 0; pi < npins && !liveEdidOk; pi++) {
-				for (int attempt = 0; attempt < 2 && !liveEdidOk; attempt++) {
+				for (int attempt = 0; attempt < 6 && !liveEdidOk; attempt++) {   // a freshly plugged monitor can need a few ms before DDC answers
 					if (tryBlock(ctl, pins[pi], method, 0, tmp)) {
 						if (!edidHeaderOk(tmp)) continue;
 						gmPin = pins[pi]; gmMode = method; gmBlocks = 1;
@@ -364,6 +391,13 @@ namespace HDMIB {
 								for (int i = 0; i < 128; i++) liveEdid[128 + i] = t2[i];
 								gmBlocks = 2;
 							}
+						}
+						{   // decide the colour-format handling for THIS sink from its raw EDID, then apply it
+							bool adv = (liveEdid[24] & 0x18) || (gmBlocks >= 2 && liveEdid[128] == 0x02 && (liveEdid[131] & 0x30));
+							rgbOnly = rgbMode < 0 ? (adv ? 2 : 0) : rgbMode;
+							sanitizeEdid(liveEdid, 0);
+							if (gmBlocks >= 2) sanitizeEdid(liveEdid + 128, 1);
+							if (rgbOnly >= 2) gmBlocks = 1;
 						}
 						liveEdidOk = true;
 					} else {
@@ -440,6 +474,8 @@ namespace HDMIB {
 		if (ret != 0 && (block == 1 || block == 2) && buf) {
 			// The sink did not answer through Apple's (DisplayPort-oriented) DDC path: hand over the EDID we read ourselves
 			if (auto src = edidFor(block)) { for (int i = 0; i < 128; i++) buf[i] = src[i]; ret = 0; }
+		} else if (ret == 0 && (block == 1 || block == 2) && buf) {
+			sanitizeEdid(buf, (int)block - 1);     // Apple's own read worked: same RGB-only treatment
 		}
 		return ret;
 	}
@@ -492,7 +528,9 @@ namespace HDMIB {
 			lastPortMode = portMode;
 			gCtl = ctl;
 			ensureDbuf2(ctl);
-			readLiveEdid(ctl);
+			auto tp = getPortByDDI ? getPortByDDI(tddi) : nullptr;
+			if (isHPDLow && ptrOk(tp) && isHPDLow(tp)) { liveEdidOk = false; edidForgotten++; }   // cable/monitor removed: forget its EDID
+			else readLiveEdid(ctl);
 		}
 		orgHotplug(ctl, ddi, portMode);
 		if (!tgt) return;
@@ -670,6 +708,7 @@ namespace HDMIB {
 		auxBlockEnabled = intArg("igfxhdmib-aux", 1);
 		dc6FixEnabled = intArg("igfxhdmib-dc6fix", 1);
 		edidFallback = intArg("igfxhdmib-edid-fallback", 0);
+		rgbMode = intArg("igfxhdmib-rgb", -1);
 
 		auto solve = [&](const char *sym) { return patcher.solveSymbol(index, sym, address, size); };
 		auto gp = solve("__ZN14AppleIntelPort12getPortByDDIEj");

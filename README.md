@@ -4,10 +4,14 @@ A [WhateverGreen](https://github.com/acidanthera/WhateverGreen) module that make
 port work on Ice Lake LP laptops, where Apple's framebuffer driver only knows how to talk
 DisplayPort on that DDI.
 
-> **Status: 1.0-rc3.** Working daily on one machine (ASUS X415JA, i5-1035G1, Iris Plus G1).
+> **Status: 1.0-rc6.** Working daily on one machine (ASUS X415JA, i5-1035G1, Iris Plus G1).
 > It has **not** been tested anywhere else. It patches undocumented structures of Apple's
 > kext, so a wrong offset is a kernel panic — which is why it stays idle on any macOS
 > version whose layout has not been verified.
+>
+> The colour-format fix of this build is **automatic** (`igfxhdmib-rgb=-1`), but only the
+> forced mode (`igfxhdmib-rgb=2`) has been confirmed on hardware. The automatic mode is
+> expected to behave the same way; treat it as unconfirmed until somebody reports back.
 
 ---
 
@@ -34,7 +38,9 @@ the HDMI framebuffer, and work-arounds for the panics that come with HDMI hot-pl
 
 | | Component | Status | Notes |
 |---|---|:--:|---|
-| 🖥️ | HDMI video | ⏳ | Confirmed at **1360×768**, the only mode tested. Higher resolutions and 4K are **pending testing**, not known to be broken |
+| 🖥️ | HDMI video | ⏳ | Confirmed at **1360×768** (VGA→HDMI adapter) and **1366×768** (LG HD 18.5", native mode). Higher resolutions and 4K are **pending testing**, not known to be broken |
+| 🎨 | Colour format (purple tint) | ✅ | Fixed on the LG 1366×768 monitor that showed a purple picture, with `igfxhdmib-rgb=2` forced. The automatic mode of this build is ⏳ unconfirmed |
+| 🧠 | EDID handling | ⏳ | Forget on unplug, full re-read on a different or silent sink, up to 6 DDC attempts. Loaded on hardware; it did **not** turn out to be the cause of the purple tint |
 | 🔊 | HDMI audio | ❌ | Not implemented. Audio over the 3.5 mm jack is unaffected |
 | 💻 | Internal panel | ✅ | Unchanged by the module; brightness works |
 | 🖱️ | Hardware cursor on HDMI | ✅ | Falls back to a software cursor if the cursor memory looks wrong |
@@ -45,11 +51,12 @@ the HDMI framebuffer, and work-arounds for the panics that come with HDMI hot-pl
 Verified on the reference machine:
 
 ```
-HDMIB-version = 1.0-rc3
+HDMIB-version = 1.0-rc6
 HDMIB-layout  = macOS 15 (Sequoia)
 HDMIB-hooks   = installed
 HDMIB-port    = ddi=1 gmbus=2 class=2 type=0x800 flags=0x2c1 OK (HDMI)
 HDMIB-status  = hotplugs=1 edid-ok=1 edid-fail=0 dbuf-fixed=1 ...
+HDMIB-edid    = mfg=GSM product=0x5acd ... ext=0 cea3=0x00 rgb=2 forgotten=0
 ```
 
 ### Supported versions
@@ -90,7 +97,9 @@ Only if you build it yourself; the release kext needs nothing but OpenCore.
 ### 1. Get the kext
 
 Either download `WhateverGreen-HDMIB.kext.zip` from
-[Releases](../../releases) and unzip it, or build it yourself:
+**[release v1.0.0-rc6](../../releases/tag/v1.0.0-rc6)** and unzip it, or build it yourself.
+Every release here is a candidate and is marked *pre-release* on GitHub on purpose: it is
+the current build, not a stable 1.0 yet.
 
 ```bash
 bash build_weg_hdmib.sh
@@ -192,10 +201,12 @@ PciRoot(0x0)/Pci(0x2,0x0)`, not a trimmed example.
 | `igfxhdmib-aux=0` | 1 | do not short-circuit the AUX reads the accelerator keeps issuing for the HDMI stream |
 | `igfxhdmib-dc6fix=0` | 1 | do not skip the second `enableHWDC6()` (panic *DC6 is already enabled*) |
 | `igfxhdmib-edid-fallback=1` | 0 | if the monitor's EDID cannot be read, present a generic 1024×768@60 EDID |
+| `igfxhdmib-rgb=-1\|0\|1\|2` | -1 (auto) | colour format. `-1`: if the sink's EDID advertises YCbCr, behave as `2`, otherwise leave the EDID untouched. `0`: never touch it. `1`: hide only the YCbCr bits. `2`: hide YCbCr **and** the CEA extension, so the sink is driven as plain DVI/RGB |
 | `igfxhdmib-force=1` | 0 | run on a macOS version whose layout is not verified. **At your own risk** |
 
 Arguments from the development builds (`igfxhdmib-mode`, `-rc6`, `-cpg`, `-sample*`,
-`-ring`, `-trace`) are ignored and can be removed.
+`-ring`, `-trace`) are ignored and can be removed. (`-rc6` there is an old boot argument,
+unrelated to this version's name.)
 
 ---
 
@@ -219,6 +230,8 @@ are **not** underruns — filter them out.
 | `HDMIB-hooks = "installed"` | hooks are in place |
 | `HDMIB-port = … NOT HDMI` | the connector patch is missing or wrong; see step 3 |
 | `HDMIB-status = "hotplugs=1 edid-ok=1 …"` | a hotplug ran and the EDID was read. `edid-fail>0` → check cable/adapter, or try `igfxhdmib-edid-fallback=1` |
+| `HDMIB-edid = "none …"` | no EDID is cached; Apple's own answer is used |
+| `HDMIB-edid = "… ext=0 cea3=0x00 rgb=2"` | which monitor the module believes is connected, and the colour mode it applied. `rgb=2` with `ext=0` is the state that fixes the purple tint |
 
 **A stale kext is the most common failure.** An old build shows ~100 `HDMIB-*` keys and
 `HDMIB-mode=0`; current builds show only `HDMIB-version/layout/hooks/status/port`. Compare
@@ -236,9 +249,16 @@ When reporting a problem, include the macOS build, the `ioreg` output, your iGPU
 
 ## Known issues
 
-- **HDMI audio does not work.** Not implemented; nothing to configure.
-- **Only 1360×768 has been tested.** Higher pixel clocks and 4K are untested, not
-  confirmed broken.
+- **HDMI audio does not work.** Not implemented; nothing to configure. Note that the CEA
+  extension carrying the audio flags is hidden by `rgb=2`/auto, so do not expect it to
+  appear by accident.
+- **Only 1360×768 and 1366×768 have been tested** (85.5 MHz). Higher pixel clocks and 4K are
+  untested, not confirmed broken. 1080p needs ~148.5 MHz and may overrun pipe B / DBUF.
+- **Purple/magenta picture on a monitor that advertises YCbCr.** Apple's driver picks YCbCr
+  4:4:4 and this HDMI-over-DP path does not handle it. `igfxhdmib-rgb=2` (or the automatic
+  mode) hides YCbCr and the CEA extension so the sink is driven as RGB. Cost: modes that
+  only exist in the CEA block (720p, 576p, 480p) disappear from the mode list.
+- The automatic colour mode is the one thing in this build **not** confirmed on hardware.
 - If the internal panel is **not** at its native resolution when the cable goes in, the
   HDMI output can stay black. Set the panel back to native and re-plug.
 - Plugging the cable **after login** is the best-tested path. For a cable plugged at boot,
@@ -310,7 +330,7 @@ the checklist on real hardware.
 | Module | header-only, `kern_igfx_hdmib.hpp` |
 | Compile-checked against | WhateverGreen `093e76f`, Lilu `0249c3a`, MacKernelSDK `3f75008` |
 | Kext version | `1.7.2` (WhateverGreen's own version) |
-| SHA-1 of the released binary | `d5ff7571a4ba606da041f3e62f2d8ff62801ce80` |
+| SHA-1 of the released binary | `3558b13ccc0dd9fffa68a23de7a0bf5a5eb16e4e` |
 | Requirement | full Xcode, Intel or Apple Silicon (the kext is always x86_64) — see [What you need](#what-you-need) |
 
 ---
